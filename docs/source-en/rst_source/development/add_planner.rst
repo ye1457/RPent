@@ -58,3 +58,39 @@ Wire and Validate the Planner
 Add a construction branch in ``rpent/planner/base.py:build_planner`` and a CLI choice in ``rpent/cli/main.py``. If the planner supports Dashboard selection or connection diagnostics, wire those entry points and ``rpent/planner/check.py`` as well.
 
 Verify tool dispatch, text and image results, ``finish``, turn limits, errors, and the interruption and interaction paths you support. Reuse test patterns in ``tests/unit_tests/rpent/planner/``. Validate real model connectivity separately.
+
+.. _deepseek-runtime-bridge:
+
+DeepSeek Harness Runtime Bridge
+-------------------------------
+
+The optional ``deepseek-harness`` extra pins both SDK and runtime to
+``0.2.1rc2``. Compose it with ``HttpMcpServer(..., include_structured=True)``
+and ``deepseek_tools._ToolBoundary`` to expose RPent tools. The boundary retains
+native completion and execution certainty, and stops after uncertain execution
+or failed result serialization. Pass the same ledger path to ``_ToolBoundary``
+and the bridge's required ``toolLedgerPath`` setting.
+
+The bridge requires a fresh, single-agent SDK runtime. It restricts calls to the
+RPent allowlist, preserves the complete system prompt, and enforces the root-step
+budget and exact model/provider/effort for root and summary requests. It checks
+result delivery and image dimensions before another action. Callers must disable
+non-RPent tools and extra agents, set ``agent-loop.maxParallelToolCalls`` to ``1``,
+and require ``rpentBridgeReady`` in ``sdk-jsonrpc-server`` startup dependencies.
+
+In pinned rc2, model input uses MCP ``content``; ``structuredContent`` is for
+programmatic consumers. Long text remains bounded by RPent's text limit even
+when the native result and structured copy are complete. Finite negative zero
+is normalized only at the MCP boundary; non-finite values are rejected. Error
+results containing images or incomplete text stop the run because rc2 cannot
+deliver them intact.
+
+The caller owns cancellation, Toolkit drain, SDK/process cleanup, and final
+control-record interpretation. These components do not register an RPent
+planner, expose host controls, or restore persisted sessions. The offline
+``tests/unit_tests/rpent/planner/runtime/`` cases demonstrate startup, delivery,
+images, compaction, retries, and cleanup. Their SDK inventory fixture pins all
+100 profile entries; updating either dependency requires reviewing that inventory.
+
+Both distributions declare MIT and include ``LICENSE``. The runtime also ships
+``THIRD_PARTY_NOTICES.md`` for its bundled dependencies.

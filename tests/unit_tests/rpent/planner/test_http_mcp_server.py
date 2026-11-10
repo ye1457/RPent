@@ -31,6 +31,7 @@ from mcp.shared.memory import create_connected_server_and_client_session
 
 from rpent.dashboard.events import NullDashboardEventSink
 from rpent.memory.manager import MemoryManager
+from rpent.planner.deepseek_tools import _ToolBoundary
 from rpent.planner.utils.http_mcp_server import HttpMcpServer, build_mcp_server
 from rpent.session import EnvState, Payload
 from rpent.session.env_capture import CapturingEnvClient
@@ -211,7 +212,10 @@ def captured_toolkit(tmp_path):
         toolkit.close()
 
 
-def test_mcp_capture_preserves_arguments_feedback_and_environment(captured_toolkit):
+@pytest.mark.parametrize("dsh_boundary", [False, True])
+def test_mcp_capture_preserves_arguments_feedback_and_environment(
+    captured_toolkit, dsh_boundary
+):
     toolkit = captured_toolkit
     state = toolkit.state
 
@@ -244,20 +248,34 @@ def test_mcp_capture_preserves_arguments_feedback_and_environment(captured_toolk
         return ToolResult(data=result, images=[b"png"])
 
     toolkit.add_tool(move)
+    exposed = _ToolBoundary(toolkit) if dsh_boundary else toolkit
 
     async def scenario():
         async with create_connected_server_and_client_session(
-            build_mcp_server(toolkit)
+            build_mcp_server(exposed, include_structured=dsh_boundary)
         ) as session:
-            return await session.call_tool(
+            result = await session.call_tool(
                 "mcp__rpent__move",
                 {"instruction": "Move."},
                 meta={"codex_bridge_mcp_call_id": "bridge-1"},
             )
+            finish = await session.call_tool(
+                "finish", {"status": "success", "summary": "Moved."}
+            )
+            return result, finish
 
-    result = asyncio.run(scenario())
-    assert not result.isError
-    (call,) = state.tool_call_records()
+    result, finish = asyncio.run(scenario())
+    assert not result.isError and not finish.isError
+    call, finish_call = state.tool_call_records()
+    assert finish_call.status == "completed"
+    assert finish_call.raw_result.data["data"]["_finish"] is True
+    assert finish_call.feedback.data == finish.model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    if dsh_boundary:
+        assert exposed.state is state
+        assert exposed.finish_result == finish.structuredContent
+        assert result.structuredContent == {"observed": True}
     assert call.name == "move"
     assert call.planner_id is None and call.origin == "unknown"
     assert call.source_ids == {"codex_bridge_mcp_call_id": "bridge-1"}
